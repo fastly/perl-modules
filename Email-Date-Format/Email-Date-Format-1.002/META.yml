@@ -1,0 +1,15 @@
+--- #YAML:1.0
+name:                Email-Date-Format
+version:             1.002
+abstract:            produce RFC 8822 date strings
+license:             perl
+generated_by:        ExtUtils::MakeMaker version 6.36_01
+distribution_type:   module
+requires:     
+    Test::More:                    0.47
+    Time::Local:                   0.000
+meta-spec:
+    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
+    version: 1.2
+author:
+    - Ricardo SIGNES <rjbs@cpan.org>
