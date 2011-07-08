@@ -1,0 +1,15 @@
+Changes
+LICENSE
+MANIFEST
+META.json
+META.yml
+Makefile.PL
+README
+dist.ini
+lib/Version/Requirements.pm
+t/accepts.t
+t/basic.t
+t/finalize.t
+t/from-hash.t
+t/merge.t
+t/release-pod-syntax.t
