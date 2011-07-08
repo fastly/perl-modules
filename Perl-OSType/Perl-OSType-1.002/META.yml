@@ -1,0 +1,37 @@
+---
+abstract: 'Map Perl operating system names to generic types'
+author:
+  - 'David Golden <dagolden@cpan.org>'
+build_requires:
+  File::Find: 0
+  File::Temp: 0
+  Test::More: 0.88
+  constant: 0
+configure_requires:
+  ExtUtils::MakeMaker: 6.31
+dynamic_config: 0
+generated_by: 'Dist::Zilla version 4.102341, CPAN::Meta::Converter version 2.102400'
+license: perl
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: Perl-OSType
+no_index:
+  directory:
+    - t
+    - xt
+    - examples
+    - corpus
+  package:
+    - DB
+provides:
+  Perl::OSType:
+    file: lib/Perl/OSType.pm
+    version: 1.002
+requires:
+  Exporter: 0
+  perl: 5.006
+resources:
+  homepage: http://github.com/dagolden/perl-ostype/tree
+  repository: git://github.com/dagolden/perl-ostype.git
+version: 1.002
