@@ -37,7 +37,7 @@ sub process {
 
     }
     system("cp $dist->{local_path} $dist->{dist}");
-    open(my $foo, ">$dist->{dist}/$dist->{distvname}.build") || die "$dist->{dist}/$dist->{distvname}.build";
+    open(my $foo, ">$dist->{dist}/$dist->{filename}.build") || die "$dist->{dist}/$dist->{distvname}.build";
     print $foo join("\n", @deps);
     close($foo);
     system("git add $dist->{dist}");
