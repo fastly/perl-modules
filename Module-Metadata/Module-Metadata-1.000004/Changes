@@ -1,0 +1,22 @@
+1.0.4 2011-02-03 07:55:00
+  - Fix broken metadata.t when @INC has relative paths (JJORE)
+
+1.0.3 2011-01-06 21:35:00
+  - Pod cleanup (DAGOLDEN)
+
+1.0.2 2010-12-10 12:00:00
+  - Remove Module::Metadata::Version and depend directly on version.pm
+    (DAGOLDEN)
+  - Munge versions that fail even "lax" version number rules to try
+    to return something sensible (DAGOLDEN)
+
+1.0.1 2010-07-09 00:52:37
+  - fix build code to prevent Author.PL being mistakenly run during make
+    and add some extra author-side tools (MSTROUT)
+
+1.0.0 2010-07-07
+  - Initial release (MSTROUT)
+  - Code extracted from Module::Build + Module::Build::Version (MSTROUT)
+  - Tests extracted from Module::Build (DAGOLDEN)
+  - POD coverage (MSTROUT)
+  - Use of Log::Contextual when loaded with fallback to warn() (MSTROUT)
