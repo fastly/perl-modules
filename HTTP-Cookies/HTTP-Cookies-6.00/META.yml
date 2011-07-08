@@ -1,0 +1,28 @@
+--- #YAML:1.0
+name:               HTTP-Cookies
+version:            6.00
+abstract:           HTTP cookie jars
+author:
+    - Gisle Aas <gisle@activestate.com>
+license:            perl
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
+requires:
+    HTTP::Date:           6
+    HTTP::Headers::Util:  6
+    perl:                 5.008008
+    Time::Local:          0
+resources:
+    MailingList:  mailto:libwww@perl.org
+    repository:   http://github.com/gisle/libwww-perl
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.56
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4
