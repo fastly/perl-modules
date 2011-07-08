@@ -1,7 +1,0 @@
-Fixed the t/08 test
-
---This line, and those below, will be ignored--
-
-M    dist.ini
-M    t/08multipart-suffix.t
-M    Changes
