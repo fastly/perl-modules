@@ -1,0 +1,472 @@
+#!/usr/bin/perl -w
+$VERSION = (qw$LastChangedRevision: 757 $)[1];
+$VERSION ||= 0.24;
+
+=head1 NAME
+
+check_soa - Check nameservers for a domain
+
+=head1 SYNOPSIS
+
+B<check_soa> [B<-d>] [B<-n>] [B<-t>] [B<-v>] I<domain> [I<nameserver>]
+
+=head1 DESCRIPTION
+
+B<check_soa> builds a list of nameservers for the zone
+which contains the specified domain name.
+The program queries each nameserver for the relevant SOA record
+and reports the zone serial number.
+
+Error reports are generated for nameservers which reply with incorrect,
+non-authoritative or outdated information.
+
+=over 8
+
+=item I<domain>
+
+Fully qualified domain name to be tested.
+Domains within ip6.arpa or in-addr.arpa namespaces may be specified
+using the appropriate IP address or prefix notation.
+
+=item I<nameserver>
+
+Optional name or list of IP addresses of specific nameserver to be tested.
+Addresses are used in the sequence they appear in the argument list.
+
+=back
+
+SOA query packets are sent to the nameservers as rapidly as the underlying hardware will allow.
+The program waits for a response only when it is needed for analysis.
+Execution time is determined by the slowest nameserver.
+
+This perldoc(1) documentation page is displayed if the I<domain> argument is omitted.
+
+The program is based on the B<check_soa> idea described by Albitz and Liu.
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-d>
+
+Turn on resolver diagnostics.
+
+=item B<-n>
+
+Report negative cache TTL.
+
+=item B<-t>
+
+Ignore UDP datagram truncation.
+
+=item B<-v>
+
+Verbose output including address records for each nameserver.
+
+=back
+
+=head1 EXAMPLES
+
+=over 8
+
+=item check_soa example.com
+
+Query all nameservers for the specified domain.
+
+=item check_soa example.com ns.icann.org
+
+Query specific nameserver as above.
+
+=item check_soa 192.168.99.0
+
+Query nameservers for specified in-addr.arpa subdomain.
+
+=item check_soa 2001:DB8::8:800:200C:417A
+
+Query nameservers for specified ip6.arpa subdomain.
+
+=item check_soa 2001:DB8:0:CD30::/60
+
+As above, for IPv6 address prefix of specified length.
+
+=back
+
+=head1 BUGS
+
+The program can become confused by zones which originate,
+or appear to originate, from more than one primary server.
+
+The timeout code exploits the 4 argument form of select() function.
+This is not guaranteed to work in non-Unix environments.
+
+=head1 COPYRIGHT
+
+(c) 2003-2008  Dick Franks E<lt>rwfranks[...]acm.orgE<gt>
+
+This program is free software;
+you may use or redistribute it under the same terms as Perl itself.
+
+=head1 SEE ALSO
+
+Paul Albitz, Cricket Liu.
+DNS and BIND, 5th Edition.
+O'Reilly & Associates, 2006.
+
+M. Andrews.
+Negative Caching of DNS Queries.
+RFC2308, IETF Network Working Group, 1998.
+
+Tom Christiansen, Jon Orwant, Larry Wall.
+Programming Perl, 3rd Edition.
+O'Reilly & Associates, 2000.
+
+R. Elz, R. Bush.
+Clarifications to the DNS Specification.
+RFC2181, IETF Network Working Group, 1997.
+
+P. Mockapetris.
+Domain Names - Concepts and Facilities.
+RFC1034, IETF Network Working Group, 1987.
+
+=cut
+
+
+use strict;
+
+my $self = $0;							# script
+
+my $options = 'dntv';						# options
+my %option;
+eval { require Getopt::Std; Getopt::Std::getopts( $options, \%option ) };
+warn "Can't locate Getopt::Std\n" if $@;
+
+my ( $domain, @nameserver ) = @ARGV;				# arguments
+
+my @flags = map {"[-$_]"} split( //, $options );
+die eval { system("perldoc -F $self"); "" }, <<END unless @ARGV;
+	Synopsis:  $self @flags domain [nameserver]
+END
+
+
+require Net::DNS;
+
+my @conf = (	debug => ( $option{d} || 0 ),			# -d	enable diagnostics
+		igntc => ( $option{t} || 0 )			# -t	ignore truncation
+		);
+
+my $negtest = $option{n};					# -n	report NCACHE TTL
+my $verbose = $option{v};					# -v	verbose
+
+my $neg_ttl_max = 86400;					# NCACHE TTL reporting threshold
+my $neg_ttl_min = 300;						# NCACHE TTL reporting threshold
+my $udp_timeout = 5;						# timeout for parallel operations
+my $udp_wait	= 0.020;					# minimum polling interval
+
+$neg_ttl_max = 0 if $negtest;					# force NCACHE TTL reporting
+
+my $name = Net::DNS::Question->new($domain)->qname;		# invert IP address/prefix
+die "\tFeature not supported by Net::DNS ", &Net::DNS::version, "\n"
+	if $name =~ m/:[A-Fa-f0-9:]+[0-9.]*$|\s\.ip6|\/\d+$/;
+
+my $resolver = Net::DNS::Resolver->new(@conf);			# create resolver object
+$resolver->nameservers(@nameserver) || die $resolver->string;
+
+my @ns = NS($name);						# find NS serving name
+unless (@ns) {
+	displayRR( $name, 'ANY' );				# show any RR for name
+	displayRR( $name, 'NS' );				# show failed NS query
+	die $resolver->string;					# game over
+}
+
+my @nsnames = map { $_->nsdname } @ns unless @nameserver;	# extract server names from NS records
+my @servers = ( @nameserver, sort @nsnames );
+
+my $zone   = $ns[0]->name;					# find zone name
+my $serial = 0;
+
+for my $soa ( displayRR( $zone, 'SOA' ) ) {			# simple sanity check
+	$serial = $soa->serial;
+	my $mname  = lc $soa->mname;				# primary server
+	my $rname  = lc $soa->rname;				# responsible person
+	my $retry  = 1 + $soa->retry;				# retry interval
+	my $window = $soa->expire - $soa->refresh;		# zone transfer window
+	my $n	   = int( $window + $retry ) / $retry;		# number of transfer attempts
+	my $s	   = $n != 1 ? 's' : '';
+	report("data expires after $n zone transfer failure$s") unless $n > 3;
+	report('zone data expires before scheduled refresh') if $window < 0;
+
+	$negtest = 1 if ( $soa->ttl < $neg_ttl_min )		# report extreme NCACHE TTL
+		or ( $soa->minimum < $neg_ttl_min )
+		or ( $soa->minimum > $neg_ttl_max );
+
+	next if $mname eq lc $zone;				# local zone
+
+	if ( $rname =~ /(([^.]|\\\.)*[^\\])\.(.+)$/ ) {		# check mail domain for RNAME
+		my $rnameok;
+		for my $type (qw(MX A AAAA CNAME)) {
+			my $packet = $resolver->send( $3, $type ) || last;
+			last if $packet->header->rcode ne 'NOERROR';
+			last if $rnameok = $packet->answer;
+			$rnameok++ unless $packet->header->ra;
+		}
+		( my $mailbox = "$1\@$3" ) =~ s/\\\./\./g;
+		report( 'unresolved RNAME', $mailbox ) unless $rnameok;
+	} else {
+		report( 'incomplete RNAME', $rname );
+	}
+}
+
+displayRR( $zone, 'NS' ) if @nameserver;			# show NS if testing specified nameserver
+displayRR( $name, 'ANY' );					# show RR for user-specified name
+
+my @ncache = NCACHE($zone) if $negtest;
+for my $soa (@ncache) {						# report observed NCACHE TTL
+	$serial = $soa->serial;
+	report( 'negative cache TTL', clock( $soa->ttl ) )
+		if ( $soa->ttl > $neg_ttl_max )
+		or ( $soa->ttl < $neg_ttl_min );
+}
+
+print "----\n";
+
+my ( $bad, $seq, $iphash ) = checkNS( $zone, @servers );	# report status
+print "\n";
+exit if @nameserver;
+my $s = $bad != 1 ? 's' : '';
+print "Unsatisfactory response from $bad nameserver$s\n\n" if $bad;
+
+my %mname  = reverse %$iphash;					# invert address hash
+my $mcount = keys %mname;					# number of different MNAMEs
+if ( $mcount > 1 ) {
+	report("zone appears to have $mcount primary servers");	# RFC1034, 4.3.5
+	foreach ( sort keys %mname ) { report("\t$_") }
+}
+
+exit;
+
+
+sub catnap {					## short duration sleep
+	my $duration = shift;					# seconds
+	sleep( 1 + $duration ) unless eval { defined select( undef, undef, undef, $duration ) };
+}
+
+
+sub checkNS {					## check nameservers (in parallel) and report status
+	my $zone    = shift;
+	my $index   = @_;					# index last element
+	my $element = pop @_ || return ( 0, $serial, {} );	# pop element, terminate if undef
+	my ( $ns, $if ) = split / /, lc $element;		# name + optional interface IP
+
+	my $res = Net::DNS::Resolver->new(@conf);		# use clean resolver for each test
+	my @xip = sort $res->nameservers( $if || $ns );		# point at nameserver
+	@xip = $res->nameservers("$ns.") unless @xip;		# retry as absolute name (eg. localhost.)
+	my $ip = pop @xip;					# last (or only) interface
+	$res->nameservers($ip) if @xip;
+
+	$res->recurse(0);					# send non-recursive query to nameserver
+	my ( $socket, $sent ) = ( $res->bgsend( $zone, 'SOA' ), time ) if $ip;
+
+	my ( $fail, $latest, $hash ) = checkNS( $zone, @_ );	# recurse to query others in parallel
+								# pick up response as recursion unwinds
+	my $packet;
+	if ($socket) {
+		until ( $res->bgisready($socket) ) {		# timed wait on socket
+			last if time > ( $sent + $udp_timeout );
+			catnap($udp_wait);			# snatch a few milliseconds sleep
+		}
+		$packet = $res->bgread($socket) if $res->bgisready($socket);	# get response
+	} elsif ($ip) {
+		$packet = $res->send( $zone, 'SOA' );		# use sequential query model
+	}
+
+	my @pass = ( $fail, $latest, $hash );			# use prebuilt return values
+	my @fail = ( $fail + 1, $latest, $hash );
+
+	my %nsaddr;						# special handling for multihomed server
+	foreach my $xip (@xip) {				# iterate over remaining interfaces
+		$nsaddr{$ip}++;					# silently ignore duplicate address record
+		my ($f, $x, $h) = checkNS( $zone, (undef) x @_, "$ns $xip" ) unless $nsaddr{$xip}++;
+		$hash = $h unless keys %$hash;
+		@pass = @fail if $f;				# propagate failure to caller
+	}
+
+	my $rcode;
+	my @soa;
+	unless ($packet) {					# ... is no more! It has ceased to be!
+		$rcode = 'no response';
+	} elsif ( $packet->header->rcode ne 'NOERROR' ) {
+		$rcode = $packet->header->rcode;		# NXDOMAIN or fault at nameserver
+	} else {
+		@soa = grep { $_->type eq 'SOA' } $packet->answer;
+		foreach (@soa) {
+			my $mname = lc $_->mname;		# primary server
+			my @ip = $res->nameservers($mname);	# hash MNAME by IP
+			map { $hash->{$_} = $mname } ( $mname, @ip );
+		}
+	}
+
+	my %nsname;						# identify nameserver
+	unless ($ip) {
+		return @pass if lc $ns eq lc $zone;
+		print "\n[$index]\t$ns\n";			# name only
+		report('unresolved server name');
+		return @fail;
+	} elsif ( $ns =~ /:|^[0-9\.]+$/o ) {
+		my $flag = $hash->{$ip} ? '*' : '';
+		print "\n[$index]$flag\t$ip\n";			# ip only
+	} else {
+		my $flag = $hash->{$ip} ? '*' : '';
+		print "\n[$index]$flag\t$ns ($ip)\n";		# name and ip
+		$nsname{lc $1}++ if $ns =~ /(.*[^\.])\.*$/o;
+	}
+
+	if ($verbose) {
+		foreach my $ptr ( grep { $_->type eq 'PTR' } displayRR($ip) ) {
+			$nsname{lc $ptr->ptrdname}++;
+		}
+		foreach my $ns ( sort keys %nsname ) {		# show address records
+			displayRR( $ns, 'A' );
+			displayRR( $ns, 'AAAA' );
+		}
+	}
+
+	if ($rcode) {						# abject failure
+		report($rcode);
+		return @fail;
+	}
+
+	my @result = @fail;					# analyse response
+	if (@soa) {
+		if ( @soa > 1 ) {
+			report( scalar @soa, 'SOA records' );	# RFC2181, 6.1
+		} elsif ( $packet->header->aa ) {
+			@result = @pass;			# RFC1034, 6.2.1(1)
+		} else {
+			my $ttl = $soa[0]->ttl;			# RFC1034, 6.2.1(2)
+			report( "non-authoritative answer\tTTL", clock($ttl) );
+		}
+	} elsif ( @soa = grep {$_->type eq 'SOA'} $packet->authority ) {
+		my $ttl = $soa[0]->ttl;				# RFC2308, 2.2(1)(2)
+		report( "NODATA response\tTTL", clock($ttl) );
+		return @fail unless grep { $_->name =~ /^$zone$/i } @soa;
+		report('requested SOA in authority section; violates RFC2308');
+	} elsif ( my @ns = grep {$_->type eq 'NS'} $packet->authority ) {
+		report('referral received from nameserver');	# RFC2308, 2.2(4)
+		my @n = grep { $_->nsdname  =~ /$ns/i } @ns;	# self referral?
+		my @a = grep { $_->rdatastr =~ /$ip/i } $packet->additional;
+		report('authoritative data expired') if @n or @a;
+		return @fail;
+	} else {
+		report('NODATA response from nameserver');	# RFC2308, 2.2(3)
+		return @fail;
+	}
+
+	foreach (@soa) {
+		my $tc = $packet->header->tc ? 'tc' : '';
+		print "$tc\t\t\tzone serial\t", $_->serial, "\n";
+	}
+
+	my ($soa) = @soa;					# check serial number
+	return @result if $soa->serial == $latest;		# server has latest data
+
+	if ( $soa->serial < $latest ) {				# unexpected serial number
+		report('serial number not current');
+		return @fail;
+	}
+
+	my $unrep = $latest ? ( $index - 1 - $fail ) : 0;	# all previous out of date
+	my $s = $unrep > 1 ? 's' : '';				# pedants really are revolting!
+	report("at least $unrep previously unreported stale serial number$s") if $unrep;
+	return ( $result[0] + $unrep, $soa->serial, $hash );	# restate partial result
+}
+
+
+sub clock {					## human-friendly TTL
+	my $s = shift;
+	if ( $s > 178000 ) {
+		return join '', "$s (", int( ($s+43200) / 86400 ), 'd)';
+	} elsif ( $s > 5700 ) {
+		return join '', "$s (", int( ($s+1800) / 3600 ), 'h)';
+	} elsif ( $s > 60 ) {
+		return join '', "$s (", int( ($s+30) / 60 ), 'm)';
+	}
+	return "$s";
+}
+
+
+sub displayRR {					## print specified RRs with flags or error code
+	my $packet     = $resolver->send(@_) || return ();	# get specified RRs
+	my $header     = $packet->header;
+	my $rcode      = $header->rcode;			# response code
+	my $na	       = $header->tc ? 'tc' : '';		# non-auth  response
+	my $aa	       = $header->aa ? "aa $na" : $na;		# authoritative answer
+	my ($question) = $packet->question;
+	my $qname      = $question->qname;
+	my $qtype      = $question->qtype;
+	my @answer     = $packet->answer;
+	foreach my $rr (@answer) {				# print RR with status flags
+		my $type = $rr->type || '';
+		next if $qtype eq 'ANY' and $type =~ /SOA|NS/o;	# almost ANY
+		my ($string) = $rr->string;			# display IPv6 compact form
+		$string =~ s/(:[:0]*:)(?!.*::|.+\1)/::/o if $type eq 'AAAA';
+		my $l = 95;					# abbreviate long RR
+		substr( $string, $l ) = ' ...' if length $string > $l and $type !~ /SOA|PTR/o;
+		print $rr->name =~ /^$qname$/i ? $aa : $na, "\t$string\n";
+	}
+	unless ( @answer or ( $rcode ne 'NOERROR' ) ) {		# NODATA pseudo-RCODE per RFC2308, 2.2
+		my @authority  = $packet->authority;
+		$rcode = 'NODATA' if grep { $_->type eq 'SOA' } @authority;	# type 1 or 2
+	}
+	report( "$rcode:\t", $question->string ) unless $rcode eq 'NOERROR';
+	return @answer;
+}
+
+
+sub NCACHE {					## get NCACHE SOA for domain
+	my $domain   = shift || '';
+	my $seq	     = time;
+	my $nxdomain = "_nxdn_$seq.$domain";			# intentionally perverse query
+	my $reply    = $resolver->send( $nxdomain, 'PTR' ) || return ();
+	return grep { $_->type eq 'SOA' } $reply->authority;
+}
+
+
+sub NS {					## find NS records for domain
+	my $domain = shift || '.';
+	my @ns = ();
+	while ($domain) {
+		my $packet = $resolver->send( $domain, 'NS' );
+		die $resolver->string unless $packet;		# local resolver problem
+		last if @ns = grep { $_->type eq 'NS' } $packet->answer;
+		my @ncache = grep { $_->type eq 'SOA' } $packet->authority;
+		my ($ncache) = grep { $_->name !~ /$domain/i } @ncache;
+		my $apex = $ncache->name if $ncache;		# zone cut
+		if ( defined $apex ) {
+			return () unless $apex;			# NXDOMAIN from root server
+			return NS($apex);			# NODATA from zone server
+		}
+
+		# Plan B: utilise delegation information from parent zone
+		my @referral = grep { $_->type eq 'NS' } $packet->authority;
+		last if @ns = grep { $_->name =~ /^$domain$/i } @referral;
+		$resolver->recurse(0);				# retry as non-recursive query
+		$packet = $resolver->send( $domain, 'NS' );
+		$resolver->recurse(1);
+		@referral = grep { $_->type eq 'NS' } $packet->authority;
+		last if @ns = grep { $_->name =~ /^$domain$/i } @referral;
+
+		# IP mapped onto in-addr.arpa space	(required for pre 0.59 compatibility)
+		my ($x) = grep { $_->qtype eq 'PTR' } $packet->question;
+		return NS( $x->qname ) if $x;
+
+		( $x, $domain ) = split /\./, $domain, 2;	# strip leftmost label
+	}
+	return @ns;
+}
+
+
+sub report {					## concatenate strings into fault report
+	print join( ' ', '#'x3, @_, "\n" );
+}
+
+__END__
